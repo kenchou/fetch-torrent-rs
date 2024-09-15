@@ -1,20 +1,20 @@
 use clap::{Arg, Command};
+use html_escape::decode_html_entities;
 use log::{debug, info, LevelFilter};
-use reqwest::{ClientBuilder, Proxy, redirect::Policy};
+use regex::Regex;
+use reqwest::{redirect::Policy, ClientBuilder, Proxy};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use url::Url;
-use html_escape::decode_html_entities;
 use urlencoding::decode;
-use regex::Regex;
 #[tokio::main]
 async fn main() {
     let matches = Command::new("mdt")
         .version("1.0")
-        .about("Rust implementation of MDT")
+        .about("Rust implementation of fetch-torrent")
         .arg(Arg::new("url").required(true).help("URL to process"))
         .arg(
             Arg::new("output")
@@ -45,9 +45,8 @@ async fn main() {
         2 => LevelFilter::Debug,
         _ => LevelFilter::Trace,
     };
-    env_logger::Builder::new()
-        .filter(None, log_level)
-        .init();
+    env_logger::Builder::new().filter(None, log_level).init();
+
     if let Err(err) = post_form(url, output_filename, proxy).await {
         eprintln!("Error: {}", err);
     }
@@ -57,8 +56,10 @@ async fn post_form(
     output_filename: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Request URL {}", url);
+
     let client_builder = ClientBuilder::new()
-        .redirect(Policy::default())  // 默认的重定向策略，可以跟随重定向
+        .redirect(Policy::default()) // 默认的重定向策略，可以跟随重定向
         .cookie_store(true);
     let client = if let Some(proxy) = proxy {
         client_builder.proxy(Proxy::all(proxy)?).build()?
@@ -72,17 +73,18 @@ async fn post_form(
         .header("Connection", "keep-alive")
         .send().await?;
     let response_url = response.url().clone();
-    info!("POST Form: request URL {}", url);
-    info!("Response URL: {}", response_url);
-    info!("Status Code: {}", response.status());
-    info!("Response Headers: {:?}", response.headers());
+    debug!("Response URL: {}", response_url);
+    debug!("Status Code: {}", response.status());
+    debug!("Response Headers: {:?}", response.headers());
+
     let body = response.text().await?;
-    debug!("Page HTML:\n{}", body);  // 打印页面HTML内容
+    debug!("Response Body:\n{}", body); // 打印页面HTML内容
+
     let document = Html::parse_document(&body);
     let form_selector = Selector::parse("form").unwrap();
     let input_selector = Selector::parse("input[name]").unwrap();
     let forms: Vec<_> = document.select(&form_selector).collect();
-    debug!("Found {} forms", forms.len());  // 打印找到的表单数量
+    debug!("Found {} forms", forms.len()); // 打印找到的表单数量
     if forms.is_empty() {
         return Err("No form found".into());
     }
@@ -95,7 +97,10 @@ async fn post_form(
     let mut data = HashMap::new();
     for input in form.select(&input_selector) {
         if let Some(name) = input.value().attr("name") {
-            data.insert(name.to_string(), input.value().attr("value").unwrap_or("").to_string());
+            data.insert(
+                name.to_string(),
+                input.value().attr("value").unwrap_or("").to_string(),
+            );
         }
     }
     info!("params: {:?}", data);
@@ -134,7 +139,9 @@ async fn post_form(
             .unwrap_or_else(|| std::ffi::OsStr::new("output"))
             .to_string_lossy()
             .to_string();
-        if let Some(content_disposition) = response.headers().get(reqwest::header::CONTENT_DISPOSITION) {
+        if let Some(content_disposition) =
+            response.headers().get(reqwest::header::CONTENT_DISPOSITION)
+        {
             let content_disposition_str = match content_disposition.to_str() {
                 Ok(v) => v.to_string(),
                 Err(_) => String::from_utf8_lossy(content_disposition.as_bytes()).to_string(),
@@ -143,9 +150,14 @@ async fn post_form(
             let re_quoted = Regex::new(r#"filename\*?=["](.*?)["](;|$)"#).unwrap();
             let re_unquoted = Regex::new(r#"filename\*?=(.*?)(;|$)"#).unwrap();
 
-            if let Some(caps) = re_quoted.captures(&content_disposition_str).or_else(|| re_unquoted.captures(&content_disposition_str)) {
+            if let Some(caps) = re_quoted
+                .captures(&content_disposition_str)
+                .or_else(|| re_unquoted.captures(&content_disposition_str))
+            {
                 let filename_encoded = caps.get(1).unwrap().as_str();
-                let decoded_filename = decode(filename_encoded).unwrap_or_else(|_| "output".into()).to_string();
+                let decoded_filename = decode(filename_encoded)
+                    .unwrap_or_else(|_| "output".into())
+                    .to_string();
                 decode_html_entities(&decoded_filename).to_string()
             } else {
                 default_filename
@@ -154,7 +166,7 @@ async fn post_form(
             default_filename
         }
     };
-    info!("Save to file {}", filename);
+    println!("Save to file {}", filename);
     let mut file = File::create(filename)?;
     file.write_all(&response.bytes().await?)?;
     Ok(())
