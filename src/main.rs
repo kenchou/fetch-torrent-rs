@@ -1,5 +1,5 @@
 use clap::{Arg, Command};
-use log::{info, LevelFilter};
+use log::{debug, info, LevelFilter};
 use reqwest::{ClientBuilder, Proxy, redirect::Policy};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
@@ -77,12 +77,12 @@ async fn post_form(
     info!("Status Code: {}", response.status());
     info!("Response Headers: {:?}", response.headers());
     let body = response.text().await?;
-    println!("Page HTML:\n{}", body);  // 打印页面HTML内容
+    debug!("Page HTML:\n{}", body);  // 打印页面HTML内容
     let document = Html::parse_document(&body);
     let form_selector = Selector::parse("form").unwrap();
     let input_selector = Selector::parse("input[name]").unwrap();
     let forms: Vec<_> = document.select(&form_selector).collect();
-    println!("Found {} forms", forms.len());  // 打印找到的表单数量
+    debug!("Found {} forms", forms.len());  // 打印找到的表单数量
     if forms.is_empty() {
         return Err("No form found".into());
     }
