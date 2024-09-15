@@ -1,0 +1,16 @@
+[package]
+name = "fetch-torrent-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.17", features = ["cargo", "derive"] }
+env_logger = "0.11.5"
+html-escape = "0.2.13"
+log = "0.4.22"
+reqwest = { version = "0.12.7", features = ["json", "cookies"] }
+scraper = "0.20.0"
+tokio = { version = "1.40.0", features = ["full"] }
+url = "2.5.2"
+urlencoding = "2.1.3"
+regex = "1.10.6"
