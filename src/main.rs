@@ -90,6 +90,12 @@ async fn post_form(
     }
     let form = forms.first().unwrap();
     let form_action = form.value().attr("action").ok_or("No form action found")?;
+    let form_action = if form_action.is_empty() {
+        "download.php"
+    } else {
+        form_action
+    };
+    
     let next_url = Url::parse(&response_url.join(form_action)?.as_str())?;
     let method = form.value().attr("method").unwrap_or("get");
     info!("action: {}", next_url);
