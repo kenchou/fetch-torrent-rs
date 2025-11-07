@@ -5,15 +5,15 @@ use regex::Regex;
 use reqwest::{redirect::Policy, ClientBuilder, Proxy};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use url::Url;
 use urlencoding::decode;
 #[tokio::main]
 async fn main() {
-    let matches = Command::new("mdt")
-        .version("1.0")
+    let matches = Command::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Rust implementation of fetch-torrent")
         .arg(Arg::new("url").required(true).help("URL to process"))
         .arg(
@@ -172,8 +172,123 @@ async fn post_form(
             default_filename
         }
     };
-    println!("Save to file {}", filename);
-    let mut file = File::create(filename)?;
-    file.write_all(&response.bytes().await?)?;
+    // 使用新的安全下载逻辑
+    download_file_with_conflict_handling(filename, &response.bytes().await?).await?;
     Ok(())
+}
+
+// 检查两个文件内容是否相同
+fn files_content_equal(path1: &Path, path2: &Path) -> io::Result<bool> {
+    let contents1 = fs::read(path1)?;
+    let contents2 = fs::read(path2)?;
+    Ok(contents1 == contents2)
+}
+
+// 生成带序号的文件名
+fn generate_unique_filename(original_path: &Path) -> PathBuf {
+    if !original_path.exists() {
+        return original_path.to_path_buf();
+    }
+
+    let stem = original_path.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = original_path.extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
+    let parent = original_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut counter = 1;
+    loop {
+        let new_filename = format!("{}_{}{}", stem, counter, extension);
+        let new_path = parent.join(&new_filename);
+        if !new_path.exists() {
+            return new_path;
+        }
+        counter += 1;
+    }
+}
+
+// 安全下载文件，处理同名文件的情况
+async fn download_file_with_conflict_handling(filename: String, content: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let filepath = Path::new(&filename);
+    
+    // 如果文件不存在，直接下载
+    if !filepath.exists() {
+        let mut file = File::create(filepath)?;
+        file.write_all(content)?;
+        println!("File downloaded: {}", filename);
+        return Ok(());
+    }
+    
+    // 创建临时文件
+    let temp_filename = format!("{}.tmp", filename);
+    let temp_path = Path::new(&temp_filename);
+    {
+        let mut temp_file = File::create(temp_path)?;
+        temp_file.write_all(content)?;
+    }
+    
+    // 比较临时文件与已存在文件的内容
+    if files_content_equal(filepath, temp_path)? {
+        // 如果内容相同，删除临时文件并跳过
+        fs::remove_file(temp_path)?;
+        println!("File {} already exists with same content, skipping.", filename);
+    } else {
+        // 如果内容不同，将临时文件重命名为带序号的文件
+        let unique_path = generate_unique_filename(filepath);
+        fs::rename(temp_path, &unique_path)?;
+        println!("File content differs. Saved as: {}", unique_path.display());
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_files_content_equal() {
+        // 创建两个具有相同内容的临时文件
+        let mut temp1 = NamedTempFile::new().unwrap();
+        let mut temp2 = NamedTempFile::new().unwrap();
+        
+        let content = b"test content";
+        temp1.write_all(content).unwrap();
+        temp2.write_all(content).unwrap();
+        
+        assert!(files_content_equal(temp1.path(), temp2.path()).unwrap());
+    }
+    
+    #[test]
+    fn test_files_content_not_equal() {
+        // 创建两个具有不同内容的临时文件
+        let mut temp1 = NamedTempFile::new().unwrap();
+        let mut temp2 = NamedTempFile::new().unwrap();
+        
+        temp1.write_all(b"content 1").unwrap();
+        temp2.write_all(b"content 2").unwrap();
+        
+        assert!(!files_content_equal(temp1.path(), temp2.path()).unwrap());
+    }
+    
+    #[test]
+    fn test_generate_unique_filename() {
+        // 创建一个临时文件进行测试
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_path = temp_file.path();
+        
+        // 如果文件不存在，应该返回原始路径
+        let non_existent = Path::new("/non/existent/file.txt");
+        assert_eq!(generate_unique_filename(non_existent), non_existent);
+        
+        // 对于已存在的文件，应该生成带序号的文件名
+        let unique_name = generate_unique_filename(temp_path);
+        assert_ne!(unique_name, temp_path.to_path_buf());
+        
+        // 文件名应该包含序号
+        let unique_str = unique_name.to_string_lossy();
+        let original_str = temp_path.file_name().unwrap().to_string_lossy();
+        assert!(unique_str.contains(&original_str[..original_str.len()-4])); // 不包含扩展名
+        assert!(unique_str.contains("_1") || unique_str.contains("_2")); // 包含序号
+    }
 }
